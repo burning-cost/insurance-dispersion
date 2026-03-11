@@ -21,10 +21,49 @@ from typing import Optional, Union
 import numpy as np
 import pandas as pd
 import formulaic
+from formulaic import Formula
 
 from insurance_dispersion.families import Family
 from insurance_dispersion.fitting import dglm_fit, _sandwich_vcov
 from insurance_dispersion.results import DGLMResult, SubmodelResult
+
+
+def _formulaic_model_matrices(formula_str: str, df: pd.DataFrame):
+    """
+    Parse a two-sided formula with formulaic and return (lhs, rhs).
+
+    Handles different formulaic versions robustly. In all versions,
+    a two-sided formula 'y ~ x1 + x2' produces a result with 'lhs' and
+    'rhs' attributes (ModelMatrices named tuple).
+    """
+    result = formulaic.model_matrix(formula_str, df)
+    # formulaic returns ModelMatrices (namedtuple-like) for two-sided formulas
+    # Check for lhs/rhs attributes
+    if hasattr(result, "lhs") and hasattr(result, "rhs"):
+        return result.lhs, result.rhs
+    # Older versions may return a plain tuple
+    if isinstance(result, (tuple, list)) and len(result) == 2:
+        return result[0], result[1]
+    # If it's just a single matrix, the formula was one-sided
+    raise ValueError(
+        f"Formula '{formula_str}' must be a two-sided formula with a response, "
+        "e.g. 'y ~ x1 + x2'. Got a one-sided result from formulaic."
+    )
+
+
+def _formulaic_rhs(formula_str: str, df: pd.DataFrame):
+    """
+    Parse a formula and return only the RHS design matrix.
+
+    Works for both one-sided ('~ x1 + x2') and two-sided formulas.
+    """
+    result = formulaic.model_matrix(formula_str, df)
+    if hasattr(result, "rhs"):
+        return result.rhs
+    if isinstance(result, (tuple, list)) and len(result) == 2:
+        return result[1]
+    # Single matrix = one-sided formula
+    return result
 
 
 class DGLM:
@@ -79,7 +118,7 @@ class DGLM:
         self.exposure = exposure
         self.method = method
         # Stored for LRT in overdispersion_test
-        self._data = data
+        self._data: Optional[pd.DataFrame] = data
         self._weights_input = weights
         self._weights_arr: Optional[np.ndarray] = None
         self._maxit = 30
@@ -120,7 +159,8 @@ class DGLM:
         if self._data is None:
             raise ValueError("No data provided. Pass data= to fit() or DGLM().")
 
-        df = self._data
+        df = self._data.reset_index(drop=True)  # ensure clean integer index
+        self._data = df  # store reset version so predict() indices align
         self._maxit = maxit
         self._epsilon = epsilon
 
@@ -139,7 +179,6 @@ class DGLM:
             prior_weights = df[w_input].to_numpy(dtype=float)
         elif w_input is not None:
             prior_weights = np.asarray(w_input, dtype=float)
-            self._weights_arr = prior_weights
         else:
             prior_weights = np.ones(n)
         self._weights_arr = prior_weights
@@ -153,7 +192,9 @@ class DGLM:
                 raise ValueError(
                     f"Exposure column '{self.exposure}' not found in data."
                 )
-            log_offset = np.log(np.clip(df[self.exposure].to_numpy(dtype=float), 1e-300, None))
+            log_offset = np.log(
+                np.clip(df[self.exposure].to_numpy(dtype=float), 1e-300, None)
+            )
 
         # ------------------------------------------------------------------
         # Fit
@@ -206,44 +247,32 @@ class DGLM:
         self, df: pd.DataFrame
     ) -> tuple[np.ndarray, np.ndarray, object]:
         """Parse mean formula, return (y, X, model_matrix_spec)."""
-        model_matrix = formulaic.model_matrix(self.formula, df)
-        if isinstance(model_matrix, tuple):
-            # formulaic returns (lhs, rhs) for two-sided formulas
-            lhs, rhs = model_matrix
-            y = lhs.to_numpy(dtype=float).ravel()
-            X = rhs.to_numpy(dtype=float)
-            schema = rhs.model_spec
-        else:
-            raise ValueError(
-                f"Formula '{self.formula}' must be a two-sided formula "
-                "with a response variable, e.g. 'y ~ x1 + x2'."
-            )
+        lhs, rhs = _formulaic_model_matrices(self.formula, df)
+        y = lhs.to_numpy(dtype=float).ravel()
+        X = rhs.to_numpy(dtype=float)
+        schema = rhs.model_spec
         return y, X, schema
 
     def _parse_disp_formula(
         self, df: pd.DataFrame
     ) -> tuple[np.ndarray, object]:
         """
-        Parse dispersion formula. The LHS is ignored — we always fit to
-        the unit deviances computed during the mean step.
+        Parse dispersion formula. The LHS is ignored — always fits to unit
+        deviances from the mean step.
         """
-        # Strip LHS if present
         dform = self.dformula.strip()
+        # Normalise: extract RHS only, build as dummy_response ~ rhs
         if "~" in dform:
-            dform = "~" + dform.split("~", 1)[1]
+            rhs_str = dform.split("~", 1)[1].strip()
+        else:
+            rhs_str = dform
 
-        # Dummy response column to satisfy formulaic for one-sided formula
-        # We use a column of ones — they are discarded
+        # Build a two-sided formula with a dummy LHS so formulaic parses it
         df_aug = df.copy()
         df_aug["__disp_dummy__"] = 1.0
-        full_formula = f"__disp_dummy__ {dform}"
+        full_formula = f"__disp_dummy__ ~ {rhs_str}"
 
-        model_matrix = formulaic.model_matrix(full_formula, df_aug)
-        if isinstance(model_matrix, tuple):
-            _, rhs = model_matrix
-        else:
-            rhs = model_matrix
-
+        lhs, rhs = _formulaic_model_matrices(full_formula, df_aug)
         Z = rhs.to_numpy(dtype=float)
         schema = rhs.model_spec
         return Z, schema
@@ -270,7 +299,11 @@ class DGLM:
         try:
             return list(schema.column_names)
         except AttributeError:
-            return [f"x{i}" for i in range(matrix.shape[1])]
+            pass
+        # Fallback for different formulaic versions
+        if hasattr(matrix, "columns"):
+            return list(matrix.columns)
+        return [f"x{i}" for i in range(matrix.shape[1])]
 
     def __repr__(self) -> str:
         return (
