@@ -5,14 +5,25 @@ This is the core algorithm from Smyth (1989). The two submodels are fitted
 in alternation:
   - Fix phi, update beta via weighted IRLS (mean step)
   - Fix mu, update alpha via Gamma GLM IRLS (dispersion step)
-Repeat until the change in total deviance is small.
+Repeat until convergence.
 
-Convergence criterion: relative change in total deviance (R dglm convention).
+Dispersion pseudo-response:
+  The dispersion submodel Gamma GLM is fitted to the unit deviances d_i
+  directly (NOT d_i / phi_i). The Gamma family has E[d_i] = phi_i, so the
+  Gamma GLM log(E[d_i]) = z_i^T alpha recovers log(phi_i). Dividing by phi_i
+  (as sometimes done in saddlepoint implementations for non-Gamma families)
+  would produce a biased fixed point: phi_fixed = sqrt(phi_true) ≠ phi_true.
 
-The dispersion step is a Gamma GLM on pseudo-response delta_i = d_i / phi_i.
-Dispersion of the Gamma GLM is fixed at 2 (saddlepoint: d_i/phi_i ~ Gamma(1/2,2)).
+REML correction (Smyth & Verbyla 1999):
+  Subtract h_ii * phi_i from d_i before the dispersion fit. This corrects for
+  the effective degrees of freedom consumed by the mean model.
 
-REML correction (Smyth & Verbyla 1999): delta_i -= h_ii before the Gamma fit.
+Numerical stability:
+  - phi clamped to [PHI_MIN, PHI_MAX] to prevent weight explosion in mean IRLS
+  - IRLS weights clamped to [1e-10, 1e10]
+  - Step damping on alpha update prevents oscillation; does not bias the
+    fixed point (since the fixed point of alpha = d*step + (1-d)*old is
+    step = old, i.e. the IRLS solution = current alpha, i.e. the ML solution)
 """
 
 from __future__ import annotations
@@ -25,6 +36,14 @@ import numpy as np
 from insurance_dispersion.families import Family
 
 
+# Clamp phi to this range to prevent IRLS weight explosion in the mean step.
+PHI_MIN = 1e-4
+PHI_MAX = 1e4
+
+# Step damping for dispersion update: alpha_new = DAMP * alpha_step + (1-DAMP) * alpha_old
+DAMP = 0.7
+
+
 # ---------------------------------------------------------------------------
 # WLS helper
 # ---------------------------------------------------------------------------
@@ -32,8 +51,6 @@ from insurance_dispersion.families import Family
 def _wls(X: np.ndarray, z: np.ndarray, w: np.ndarray) -> np.ndarray:
     """
     Weighted least squares: beta = argmin sum_i w_i * (z_i - x_i^T beta)^2.
-
-    Returns beta of shape (p,). Handles near-singular systems robustly.
     """
     sqrt_w = np.sqrt(np.clip(w, 1e-14, None))
     Xw = X * sqrt_w[:, np.newaxis]
@@ -50,9 +67,7 @@ def _wls(X: np.ndarray, z: np.ndarray, w: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def _hat_diagonal(X: np.ndarray, w: np.ndarray) -> np.ndarray:
-    """
-    Hat matrix diagonal: h_ii = diag(X (X^T W X)^{-1} X^T W).
-    """
+    """Hat diagonal h_ii = diag(H) where H = X(X^T W X)^{-1} X^T W."""
     sqrt_w = np.sqrt(np.clip(w, 1e-14, None))
     Xw = X * sqrt_w[:, np.newaxis]
     try:
@@ -78,7 +93,10 @@ def _gamma_glm_irls(
     """
     Fit Gamma GLM with log link and fixed dispersion=2 to delta.
 
-    E[delta_i] = exp(z_i^T alpha). Returns (alpha, exp(Z @ alpha)).
+    delta should be the unit deviances d_i (or REML-adjusted d_i - h_ii*phi_i).
+    Models E[delta_i] = phi_i = exp(z_i^T alpha).
+
+    Returns (alpha, phi) where phi = exp(Z @ alpha), clamped to [PHI_MIN, PHI_MAX].
     """
     n = len(delta)
     if weights is None:
@@ -89,21 +107,20 @@ def _gamma_glm_irls(
     if alpha_init is not None:
         alpha = alpha_init.copy()
     else:
-        # Init from log(mean(delta))
-        m = max(float(np.mean(delta_fit)), 1e-8)
-        alpha, _, _, _ = np.linalg.lstsq(
-            Z, np.full(n, np.log(m)), rcond=None
-        )
+        m = np.log(np.clip(np.mean(delta_fit), 1e-8, None))
+        alpha, _, _, _ = np.linalg.lstsq(Z, np.full(n, m), rcond=None)
 
     for _ in range(max_iter):
         eta = Z @ alpha
-        mu = np.exp(np.clip(eta, -30, 30))
+        # Clamp eta to prevent overflow in exp
+        eta_clamped = np.clip(eta, np.log(PHI_MIN), np.log(PHI_MAX))
+        mu = np.exp(eta_clamped)
 
-        irls_w = mu ** 2 * weights / 2.0
-        irls_w = np.clip(irls_w, 1e-14, None)
-
-        z = eta + (delta_fit - mu) / mu
-        alpha_new = _wls(Z, z, irls_w)
+        # Gamma IRLS weights: mu^2 / (2 * phi_gamma) = mu^2 / 2 (phi_gamma=2 fixed)
+        irls_w = np.clip(mu ** 2 * weights / 2.0, 1e-14, None)
+        # Working response for Gamma with log link: eta + (y - mu)/mu
+        z_irls = eta_clamped + (delta_fit - mu) / mu
+        alpha_new = _wls(Z, z_irls, irls_w)
 
         denom = max(np.linalg.norm(alpha), 1e-8)
         if np.linalg.norm(alpha_new - alpha) / denom < tol:
@@ -111,7 +128,8 @@ def _gamma_glm_irls(
             break
         alpha = alpha_new
 
-    phi = np.exp(np.clip(Z @ alpha, -30, 30))
+    eta_final = np.clip(Z @ alpha, np.log(PHI_MIN), np.log(PHI_MAX))
+    phi = np.exp(eta_final)
     return alpha, phi
 
 
@@ -131,12 +149,14 @@ def _fit_mean(
     tol: float = 1e-8,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Fit mean submodel via IRLS with weights prior_w / (phi * V(mu) * g'(mu)^2).
+    Fit mean submodel via IRLS. Returns (beta, mu, irls_weights).
 
-    Returns (beta, mu, irls_weights).
+    phi is clamped to [PHI_MIN, PHI_MAX] before computing weights to prevent
+    weight explosion when the dispersion step overshoots.
     """
     n = len(y)
     offset = log_offset if log_offset is not None else np.zeros(n)
+    phi_safe = np.clip(phi, PHI_MIN, PHI_MAX)
 
     if beta_init is not None:
         beta = beta_init.copy()
@@ -153,11 +173,12 @@ def _fit_mean(
         V = family.variance(mu)
         g_prime = family.link.deriv(mu)
 
-        irls_w = prior_weights / (phi * np.clip(V, 1e-300, None) * g_prime ** 2)
-        irls_w = np.clip(irls_w, 1e-14, None)
+        # Weight: prior_w / (phi * V(mu) * g'(mu)^2); clamp to [1e-10, 1e10]
+        raw_w = prior_weights / (phi_safe * np.clip(V, 1e-300, None) * g_prime ** 2)
+        irls_w = np.clip(raw_w, 1e-10, 1e10)
 
         z_full = eta + (y - mu) * g_prime
-        z = z_full - offset  # regress without offset
+        z = z_full - offset
 
         beta_new = _wls(X, z, irls_w)
 
@@ -172,28 +193,15 @@ def _fit_mean(
     mu = np.clip(mu, 1e-300, None)
     V = family.variance(mu)
     g_prime = family.link.deriv(mu)
-    irls_w_final = prior_weights / (phi * np.clip(V, 1e-300, None) * g_prime ** 2)
-    irls_w_final = np.clip(irls_w_final, 1e-14, None)
+    raw_w = prior_weights / (phi_safe * np.clip(V, 1e-300, None) * g_prime ** 2)
+    irls_w_final = np.clip(raw_w, 1e-10, 1e10)
 
     return beta, mu, irls_w_final
 
 
 # ---------------------------------------------------------------------------
-# Total deviance
+# Log-likelihood
 # ---------------------------------------------------------------------------
-
-def _total_deviance(
-    family: Family,
-    y: np.ndarray,
-    mu: np.ndarray,
-    phi: np.ndarray,
-    prior_weights: np.ndarray,
-) -> float:
-    """Weighted sum of unit deviances d_i = deviance_resid(y_i, mu_i)."""
-    d = family.deviance_resid(y, mu)
-    d = np.where(np.isfinite(d), d, 0.0)
-    return float(np.sum(d * prior_weights))
-
 
 def _joint_loglik(
     family: Family,
@@ -202,7 +210,6 @@ def _joint_loglik(
     phi: np.ndarray,
     prior_weights: np.ndarray,
 ) -> float:
-    """Weighted joint log-likelihood."""
     ll_arr = family.log_likelihood(y, mu, phi)
     ll_arr = np.where(np.isfinite(ll_arr), ll_arr, 0.0)
     return float(np.sum(ll_arr * prior_weights))
@@ -243,23 +250,15 @@ def dglm_fit(
     """
     Fit a Double GLM via alternating IRLS (Smyth 1989).
 
-    Convergence criterion: relative change in the WITHIN-DISPERSION-STEP
-    deviance (i.e. the Gamma GLM deviance), following R dglm. The algorithm
-    converges when the dispersion deviance stops changing between outer
-    iterations.
+    The dispersion pseudo-response is the unit deviance d_i (NOT d_i/phi_i).
+    The Gamma GLM models E[d_i] = phi_i. Using d_i/phi_i would give a biased
+    fixed point phi_fixed = sqrt(phi_true) due to the self-referential scaling.
 
-    Parameters
-    ----------
-    family : Family
-    X : ndarray (n, p)
-    Z : ndarray (n, q)
-    y : ndarray (n,)
-    prior_weights : ndarray (n,), optional
-    log_offset : ndarray (n,), optional
-    method : {'reml', 'ml'}
-    maxit : int
-    epsilon : float — convergence tolerance on deviance change
-    verbose : bool
+    Convergence: relative change in Gamma deviance between outer iterations,
+    following the R dglm convention. This is tracked on the UNDAMPED alpha_step
+    to avoid the slow-convergence issue of measuring a permanently damped sequence.
+
+    Step damping (DAMP=0.7) is applied to alpha updates for numerical stability.
     """
     n = len(y)
     if prior_weights is None:
@@ -272,7 +271,6 @@ def dglm_fit(
     # -----------------------------------------------------------------------
     # Initialise
     # -----------------------------------------------------------------------
-    # Step 1: Fit mean GLM with phi=1
     beta, mu, irls_w = _fit_mean(
         family, X, y,
         phi=np.ones(n),
@@ -282,7 +280,7 @@ def dglm_fit(
         max_iter=100, tol=1e-8,
     )
 
-    # Step 2: Initialise dispersion from unit deviances (phi_init=1)
+    # Init dispersion: fit Gamma GLM to raw unit deviances
     d_init = np.clip(family.deviance_resid(y, mu), 1e-8, None)
     alpha, phi = _gamma_glm_irls(
         Z, d_init,
@@ -297,16 +295,14 @@ def dglm_fit(
     loglik_history: list[float] = []
     converged = False
     n_iter = 0
-
-    # Track the Gamma deviance from the dispersion step for convergence
-    # (following R dglm: convergence on dispersion deviance change)
     prev_disp_dev = np.inf
+    rel_change = np.inf
 
     for iteration in range(maxit):
         n_iter = iteration + 1
 
         # ------------------------------------------------------------------
-        # Mean step: update beta with current phi
+        # Mean step: update beta, mu given current phi
         # ------------------------------------------------------------------
         beta, mu, irls_w = _fit_mean(
             family, X, y,
@@ -318,44 +314,57 @@ def dglm_fit(
         )
 
         # ------------------------------------------------------------------
-        # Dispersion step: Gamma GLM on delta = d/phi
+        # Dispersion step
+        #
+        # The pseudo-response is the raw unit deviance d_i.
+        # E[d_i] = phi_i, so Gamma GLM with log link recovers log(phi_i).
+        #
+        # REML correction: d_i -= h_ii * phi_i  (Smyth & Verbyla 1999)
         # ------------------------------------------------------------------
         d = np.clip(family.deviance_resid(y, mu), 1e-8, None)
-        delta = d / np.clip(phi, 1e-300, None)
+        delta = d.copy()  # pseudo-response: raw unit deviances
 
         if method == "reml":
             h = _hat_diagonal(X, irls_w)
             h = np.clip(h, 0.0, 0.99)
-            delta = delta - h
+            phi_safe = np.clip(phi, PHI_MIN, PHI_MAX)
+            delta = delta - h * phi_safe
             delta = np.clip(delta, 1e-8, None)
 
-        alpha, phi = _gamma_glm_irls(
+        alpha_old = alpha.copy()
+        alpha_step, _ = _gamma_glm_irls(
             Z, delta,
             weights=prior_weights,
             alpha_init=alpha,
             max_iter=100, tol=1e-8,
         )
 
+        # Damped update: alpha moves toward alpha_step at rate DAMP
+        alpha = DAMP * alpha_step + (1.0 - DAMP) * alpha_old
+        phi = np.exp(np.clip(Z @ alpha, np.log(PHI_MIN), np.log(PHI_MAX)))
+
         # ------------------------------------------------------------------
-        # Log-likelihood and convergence
+        # Convergence: Gamma deviance using alpha_step (undamped proposal)
+        # Measure against the proposed fit, not the damped alpha, so that
+        # convergence fires when the IRLS solution is stable.
         # ------------------------------------------------------------------
         ll = _joint_loglik(family, y, mu, phi, prior_weights)
         loglik_history.append(ll)
 
-        # Compute Gamma GLM deviance for the dispersion step
-        # (sum of Gamma unit deviances: 2*(delta/mu - 1 - log(delta/mu)))
-        mu_disp = np.exp(np.clip(Z @ alpha, -30, 30))
+        # Gamma deviance of dispersion pseudo-response at alpha_step
+        mu_step = np.exp(np.clip(Z @ alpha_step, np.log(PHI_MIN), np.log(PHI_MAX)))
+        delta_safe = np.clip(delta, 1e-300, None)
+        mu_step_safe = np.clip(mu_step, 1e-300, None)
         gamma_dev = float(np.sum(
             prior_weights * 2.0 * (
-                np.clip(delta, 1e-300, None) / mu_disp - 1.0
-                - np.log(np.clip(delta / mu_disp, 1e-300, None))
+                delta_safe / mu_step_safe - 1.0
+                - np.log(delta_safe / mu_step_safe)
             )
         ))
 
         if verbose:
-            print(f"  DGLM iter {n_iter}: loglik = {ll:.6f}, disp_dev = {gamma_dev:.6f}")
+            print(f"  DGLM iter {n_iter}: loglik={ll:.4f}, disp_dev={gamma_dev:.4f}")
 
-        # Convergence: relative change in Gamma deviance
         rel_change = abs(gamma_dev - prev_disp_dev) / (abs(prev_disp_dev) + 1e-3)
         if rel_change < epsilon:
             converged = True
@@ -371,7 +380,7 @@ def dglm_fit(
             stacklevel=2,
         )
 
-    phi_final = np.exp(np.clip(Z @ alpha, -30, 30))
+    phi_final = np.exp(np.clip(Z @ alpha, np.log(PHI_MIN), np.log(PHI_MAX)))
     disp_irls_w = phi_final ** 2 * prior_weights / 2.0
 
     return DGLMFitResult(
