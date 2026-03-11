@@ -3,7 +3,7 @@ Alternating IRLS engine for the Double GLM.
 
 This is the core algorithm from Smyth (1989). The two submodels are fitted
 in alternation: fix phi, update beta (mean step); fix mu, update alpha
-(dispersion step). Repeat until the joint log-likelihood converges.
+(dispersion step). Repeat until convergence.
 
 The dispersion step is a Gamma GLM on the pseudo-response delta_i = d_i / phi_i,
 where d_i is the unit deviance. The Gamma GLM is fitted with log link and
@@ -11,9 +11,14 @@ dispersion fixed at 2 (as justified by the saddlepoint approximation
 d_i/phi_i ~ chi^2(1) ~ Gamma(1/2, 2)).
 
 REML correction (Smyth & Verbyla 1999): subtract phi_i * h_ii from delta_i
-before fitting the dispersion step, where h_ii is the hat-matrix diagonal from
-the mean model. This removes the contribution of estimating beta from the
-dispersion score, analogous to REML in linear mixed models.
+before fitting the dispersion step.
+
+CONVERGENCE NOTE:
+The alternating algorithm does not guarantee monotone increase of the JOINT
+log-likelihood. Each step maximises its sub-objective, but the joint function
+can oscillate slightly. We therefore use RELATIVE PARAMETER CHANGE (||beta_new
+- beta_old|| + ||alpha_new - alpha_old||) as the convergence criterion, not
+log-likelihood change. Log-likelihood is tracked for diagnostic purposes.
 """
 
 from __future__ import annotations
@@ -22,7 +27,6 @@ import warnings
 from typing import NamedTuple, Optional
 
 import numpy as np
-import scipy.linalg
 
 from insurance_dispersion.families import Family
 
@@ -67,7 +71,6 @@ def _hat_diagonal(X: np.ndarray, w: np.ndarray) -> np.ndarray:
     sqrt_w = np.sqrt(np.clip(w, 1e-14, None))
     Xw = X * sqrt_w[:, np.newaxis]  # (n, p)
     Q, _ = np.linalg.qr(Xw, mode="reduced")
-    # h_ii = ||Q[i,:]||^2 (rows of Q are orthonormal in W^{1/2} space)
     h = np.sum(Q ** 2, axis=1)
     return h
 
@@ -81,18 +84,19 @@ def _gamma_glm_irls(
     delta: np.ndarray,
     weights: Optional[np.ndarray] = None,
     alpha_init: Optional[np.ndarray] = None,
-    max_iter: int = 50,
-    tol: float = 1e-8,
+    max_iter: int = 25,
+    tol: float = 1e-6,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Fit Gamma GLM with log link to pseudo-response delta.
 
     This is the dispersion submodel. The Gamma GLM has:
-      E[delta_i] = 1   (since delta_i = d_i/phi_i and E[d_i] = phi_i)
-      Var[delta_i] = 2 (dispersion fixed at 2, the saddlepoint constant)
+      E[delta_i] = phi_i = exp(z_i^T alpha)
+      Var[delta_i] / phi_i^2 = 2  (dispersion fixed at 2 by saddlepoint)
 
-    IRLS for Gamma(log): weight = mu^2 / (2) where mu = exp(eta).
-    Working response: z = eta + (delta - mu) / mu  (= eta + delta/mu - 1)
+    IRLS for Gamma(log):
+      weight_i = mu_i^2 * obs_weight_i / 2
+      working response: z = eta + (delta - mu) / mu
 
     Parameters
     ----------
@@ -100,55 +104,46 @@ def _gamma_glm_irls(
     delta : pseudo-response (unit deviances / phi), shape (n,)
     weights : optional prior weights, shape (n,)
     alpha_init : warm-start coefficients, shape (q,)
-
-    Returns
-    -------
-    alpha : shape (q,)
-    phi_fitted : exp(Z @ alpha), shape (n,)
     """
     n = len(delta)
     if weights is None:
         weights = np.ones(n)
 
-    # Initialise from warm start or from delta directly
+    # Initialise
     if alpha_init is not None:
         alpha = alpha_init.copy()
     else:
+        # Robust init: log of clipped delta
         eta = np.log(np.clip(delta, 1e-6, None))
         alpha, _, _, _ = np.linalg.lstsq(Z, eta, rcond=None)
 
-    prev_ll = -np.inf
+    prev_alpha = alpha.copy()
 
     for _ in range(max_iter):
         eta = Z @ alpha
-        mu = np.exp(np.clip(eta, -500, 500))  # E[delta] = exp(eta)
+        mu = np.exp(np.clip(eta, -500, 500))  # E[delta] = exp(eta) = phi
 
-        # Gamma IRLS weights: w = mu^2 * obs_weights / phi_dispersion
-        # phi_dispersion = 2 (fixed by saddlepoint theory)
+        # Gamma IRLS weights: w = mu^2 * obs_weights / 2
         irls_w = mu ** 2 * weights / 2.0
+        irls_w = np.clip(irls_w, 1e-14, None)
 
         # Working response for log-link Gamma IRLS
-        # z = eta + (delta - mu) / mu
         z = eta + (delta - mu) / mu
 
         alpha = _wls(Z, z, irls_w)
 
-        # Convergence check on Gamma log-likelihood
-        eta = Z @ alpha
-        mu = np.exp(np.clip(eta, -500, 500))
-        # Gamma(shape=1/2, mean=1): log f = const - delta/(2*mu) - (1/2)*log(mu)
-        # (phi_dispersion = 2 means shape = 1/2)
-        ll = float(np.sum(weights * (-0.5 * np.log(mu) - delta / (2.0 * mu))))
-        if abs(ll - prev_ll) < tol:
+        # Convergence: relative change in alpha
+        denom = max(np.linalg.norm(prev_alpha), 1e-8)
+        if np.linalg.norm(alpha - prev_alpha) / denom < tol:
             break
-        prev_ll = ll
+        prev_alpha = alpha.copy()
 
     phi_fitted = np.exp(np.clip(Z @ alpha, -500, 500))
     return alpha, phi_fitted
 
 
 # ---------------------------------------------------------------------------
-# Mean submodel IRLS step
+# Mean submodel IRLS
 # ---------------------------------------------------------------------------
 
 def _fit_mean(
@@ -159,34 +154,15 @@ def _fit_mean(
     prior_weights: np.ndarray,
     log_offset: Optional[np.ndarray],
     beta_init: Optional[np.ndarray],
-    max_iter: int = 50,
-    tol: float = 1e-8,
+    max_iter: int = 25,
+    tol: float = 1e-6,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Fit the mean submodel via IRLS with observation-level weights 1/phi_i.
 
-    The mean GLM has:
-      g(mu_i) = x_i^T beta + offset_i
-      Var[Y_i] = phi_i * V(mu_i)
-
-    So the IRLS weight for obs i is prior_weight_i / (phi_i * V(mu_i) * g'(mu_i)^2).
-
-    Parameters
-    ----------
-    family : the mean family
-    X : design matrix (n, p)
-    y : response (n,)
-    phi : current dispersion vector (n,)
-    prior_weights : (n,)
-    log_offset : log(exposure) or None, shape (n,)
-    beta_init : warm-start coefficients
-    max_iter / tol : convergence control
-
-    Returns
-    -------
-    beta : (p,)
-    mu : (n,)
-    irls_weights : (n,) — IRLS weights at convergence (used for hat diagonal)
+    Convergence is assessed by relative change in beta, not log-likelihood,
+    because phi changes between outer iterations making LL-based convergence
+    unreliable for the inner loop.
     """
     n = len(y)
     offset = log_offset if log_offset is not None else np.zeros(n)
@@ -194,12 +170,11 @@ def _fit_mean(
     if beta_init is not None:
         beta = beta_init.copy()
     else:
-        # Moment init: project log(init_mu) onto X
         mu0 = family.init_mu(y)
         eta0 = family.mu_to_eta(mu0) - offset
         beta, _, _, _ = np.linalg.lstsq(X, eta0, rcond=None)
 
-    prev_ll = -np.inf
+    prev_beta = beta.copy()
 
     for _ in range(max_iter):
         eta = X @ beta + offset
@@ -214,21 +189,19 @@ def _fit_mean(
         irls_w = prior_weights / (phi * np.clip(V, 1e-300, None) * deta_dmu ** 2)
         irls_w = np.clip(irls_w, 1e-14, None)
 
-        # Working response: z = eta + (y - mu) * g'(mu) - offset
+        # Working response (without offset for WLS regression)
         z_full = eta + (y - mu) * deta_dmu
-        z = z_full - offset  # regress without offset
+        z = z_full - offset
 
         beta = _wls(X, z, irls_w)
 
-        # Convergence check on mean log-likelihood
-        eta = X @ beta + offset
-        mu = family.eta_to_mu(eta)
-        ll_arr = family.log_likelihood(y, mu, phi)
-        ll = float(np.sum(np.where(np.isfinite(ll_arr), ll_arr * prior_weights, 0.0)))
-        if abs(ll - prev_ll) < tol:
+        # Convergence: relative change in beta
+        denom = max(np.linalg.norm(prev_beta), 1e-8)
+        if np.linalg.norm(beta - prev_beta) / denom < tol:
             break
-        prev_ll = ll
+        prev_beta = beta.copy()
 
+    # Compute final mu and irls_weights
     eta = X @ beta + offset
     mu = family.eta_to_mu(eta)
     mu = np.clip(mu, 1e-300, None)
@@ -308,7 +281,7 @@ def dglm_fit(
     maxit : int
         Maximum outer iterations.
     epsilon : float
-        Convergence threshold: relative change in -2*loglik.
+        Convergence threshold: relative change in (||beta|| + ||alpha||).
     verbose : bool
         Print log-likelihood per iteration.
 
@@ -326,19 +299,8 @@ def dglm_fit(
         raise ValueError(f"method must be 'reml' or 'ml', got '{method}'.")
 
     # -----------------------------------------------------------------------
-    # Initialise
+    # Initialise: fit mean GLM with phi=1, then fit constant phi
     # -----------------------------------------------------------------------
-    # Step 0a: Fit intercept-only mean GLM to get initial mu
-    X_int = np.ones((n, 1))  # intercept only
-    beta0, mu, _ = _fit_mean(
-        family, X_int, y,
-        phi=np.ones(n),
-        prior_weights=prior_weights,
-        log_offset=log_offset,
-        beta_init=None,
-        max_iter=50, tol=1e-8,
-    )
-    # Now fit with the full design matrix for a better beta start
     beta, mu, irls_w = _fit_mean(
         family, X, y,
         phi=np.ones(n),
@@ -348,32 +310,28 @@ def dglm_fit(
         max_iter=50, tol=1e-8,
     )
 
-    # Step 0b: Initialise phi from intercept-only dispersion GLM
+    # Initial dispersion estimate from unit deviances
     d = family.deviance_resid(y, mu)
-    d = np.clip(d, 1e-10, None)
-    delta = d.copy()  # phi=1 initially so delta = d/1
-
+    d = np.clip(d, 1e-14, None)
+    # Use constant phi from moment estimate (Gamma GLM on intercept-only)
     Z_int = np.ones((n, 1))
-    alpha, phi = _gamma_glm_irls(Z_int, delta, weights=prior_weights, max_iter=50)
-    # phi is now a constant (intercept-only) for all obs
-
-    # Expand to full dispersion design
-    alpha, phi = _gamma_glm_irls(
-        Z, delta, weights=prior_weights, alpha_init=None, max_iter=50
-    )
+    alpha0, phi = _gamma_glm_irls(Z_int, d, weights=prior_weights, max_iter=50)
+    # Now initialise dispersion model on full Z
+    alpha, phi = _gamma_glm_irls(Z, d, weights=prior_weights, max_iter=50)
 
     # -----------------------------------------------------------------------
     # Outer alternating loop
     # -----------------------------------------------------------------------
     loglik_history: list[float] = []
-    prev_m2ll = np.inf  # -2 * loglik
     converged = False
     n_iter = 0
-
-    alpha_prev = alpha.copy()
+    prev_params_norm = None
 
     for iteration in range(maxit):
         n_iter = iteration + 1
+
+        beta_old = beta.copy()
+        alpha_old = alpha.copy()
 
         # ------------------------------------------------------------------
         # Mean step: update beta given current phi
@@ -384,59 +342,61 @@ def dglm_fit(
             prior_weights=prior_weights,
             log_offset=log_offset,
             beta_init=beta,
-            max_iter=50, tol=1e-10,
+            max_iter=25, tol=1e-6,
         )
 
         # ------------------------------------------------------------------
-        # Dispersion step: fit Gamma GLM on pseudo-response delta_i = d_i/phi_i
+        # Dispersion step: fit Gamma GLM on delta_i = d_i / phi_i
         # ------------------------------------------------------------------
         d = family.deviance_resid(y, mu)
         d = np.clip(d, 1e-14, None)
         delta = d / np.clip(phi, 1e-300, None)
 
-        # REML correction: subtract leverage from pseudo-response
+        # REML correction: subtract hat-matrix leverage
         if method == "reml":
             h = _hat_diagonal(X, irls_w)
             h = np.clip(h, 0.0, 1.0 - 1e-6)
             delta = delta - h
-            # Clamp from below to avoid Gamma GLM seeing negative responses
             delta = np.clip(delta, 1e-14, None)
 
         alpha, phi = _gamma_glm_irls(
             Z, delta,
             weights=prior_weights,
             alpha_init=alpha,
-            max_iter=50, tol=1e-10,
+            max_iter=25, tol=1e-6,
         )
 
         # ------------------------------------------------------------------
-        # Convergence check
+        # Track log-likelihood
         # ------------------------------------------------------------------
         ll = _joint_loglik(family, y, mu, phi, prior_weights)
         loglik_history.append(ll)
-        m2ll = -2.0 * ll
 
         if verbose:
             print(f"  DGLM iter {n_iter}: loglik = {ll:.6f}")
 
-        rel_change = abs(m2ll - prev_m2ll) / (abs(prev_m2ll) + 1.0)
+        # ------------------------------------------------------------------
+        # Convergence: relative change in parameter vector
+        # ------------------------------------------------------------------
+        params_norm = np.linalg.norm(beta) + np.linalg.norm(alpha)
+        delta_params = np.linalg.norm(beta - beta_old) + np.linalg.norm(alpha - alpha_old)
+        denom = max(params_norm, 1e-8)
+        rel_change = delta_params / denom
+
         if rel_change < epsilon:
             converged = True
             break
 
-        prev_m2ll = m2ll
-        alpha_prev = alpha.copy()
-
     if not converged:
         warnings.warn(
             f"DGLM did not converge after {maxit} iterations. "
-            f"Final relative change in -2*loglik: {rel_change:.2e}. "
+            f"Final relative parameter change: {rel_change:.2e}. "
             "Try increasing maxit or check for data issues.",
             RuntimeWarning,
             stacklevel=2,
         )
 
-    # Compute dispersion IRLS weights (mu^2 / 2 for Gamma with phi_disp=2)
+    # Final phi
     eta_z = Z @ alpha
     phi_final = np.exp(np.clip(eta_z, -500, 500))
     disp_irls_w = phi_final ** 2 * prior_weights / 2.0
@@ -469,7 +429,6 @@ def _sandwich_vcov(
     """
     sqrt_w = np.sqrt(np.clip(irls_weights, 1e-14, None))
     Xw = X * sqrt_w[:, np.newaxis]
-    # (X^T W X) = (Xw^T Xw)
     XtWX = Xw.T @ Xw
     try:
         return np.linalg.inv(XtWX)
