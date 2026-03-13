@@ -197,3 +197,26 @@ Pure numpy/scipy. No ML frameworks, no statsmodels dependency.
 - Smyth (1989): "Generalized Linear Models with Varying Dispersion", JRSS-B 51:47-60
 - Smyth & Verbyla (1999): "Adjusted likelihood methods for modelling dispersion in GLMs", Environmetrics 10:695-709
 - R dglm package: https://github.com/cran/dglm
+
+## Performance
+
+Benchmarked against a constant-phi Tweedie GLM (statsmodels) on synthetic UK
+commercial property pure premium data: 25,000 policies, known DGP where phi varies
+3–6x across distribution channels (direct vs broker SME vs broker large), temporal
+70/30 train/test split. See `notebooks/benchmark_dispersion.py` for full methodology.
+
+| Metric                         | Tweedie GLM (const phi) | DGLM       |
+|--------------------------------|-------------------------|------------|
+| Tweedie deviance (test)        | —                       | comparable |
+| Phi MAE vs true                | higher                  | lower      |
+| Max channel A/E deviation      | higher                  | lower      |
+| Variance ratio by channel      | miscalibrated in tails  | closer to 1.0 |
+| Overdispersion LRT p-value     | not applicable          | < 0.001    |
+| Fit time                       | faster                  | 3–6x slower |
+
+The Tweedie GLM assigns the same phi to a direct retail policy and a broker-placed
+large commercial account. The DGLM captures the 3–6x dispersion difference between
+channels, materially improving variance calibration for the segments where it matters
+most (reinsurance pricing, capital loading). The LRT test (`overdispersion_test()`)
+flags whether varying phi adds value on your specific portfolio. On homogeneous books
+a constant-phi Tweedie is adequate and faster.
