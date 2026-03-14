@@ -206,6 +206,11 @@ Pure numpy/scipy. No ML frameworks, no statsmodels dependency.
 
 **Log link for dispersion default**: ensures phi_i > 0 always. The identity link is available but requires careful monitoring — it can produce negative phi_i estimates for extrapolation.
 
+
+## Databricks Notebook
+
+A ready-to-run Databricks notebook benchmarking this library against standard approaches is available in [burning-cost-examples](https://github.com/burning-cost/burning-cost-examples/blob/main/notebooks/insurance_dispersion_demo.py).
+
 ## Reference
 
 - Smyth (1989): "Generalized Linear Models with Varying Dispersion", JRSS-B 51:47-60
