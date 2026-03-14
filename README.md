@@ -234,3 +234,11 @@ channels, materially improving variance calibration for the segments where it ma
 most (reinsurance pricing, capital loading). The LRT test (`overdispersion_test()`)
 flags whether varying phi adds value on your specific portfolio. On homogeneous books
 a constant-phi Tweedie is adequate and faster.
+
+## Related Libraries
+
+| Library | What it does |
+|---------|-------------|
+| [insurance-distributional-glm](https://github.com/burning-cost/insurance-distributional-glm) | GAMLSS — the full RS algorithm for jointly modelling mean and all distributional parameters including shape |
+| [insurance-frequency-severity](https://github.com/burning-cost/insurance-frequency-severity) | Joint frequency-severity models with Sarmanov copula — extends dispersion modelling to the two-part structure |
+
