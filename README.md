@@ -40,9 +40,23 @@ uv pip install -e .
 ## Quick start
 
 ```python
+import numpy as np
 import pandas as pd
 from insurance_dispersion import DGLM
 import insurance_dispersion.families as fam
+
+# Synthetic claim severity data
+rng = np.random.default_rng(42)
+n = 500
+df = pd.DataFrame({
+    "vehicle_class":  rng.choice(["A", "B", "C"], size=n),
+    "age_band":       rng.choice(["17-24", "25-35", "36-60"], size=n),
+    "vehicle_value":  rng.uniform(5000, 40000, size=n),
+    "channel":        rng.choice(["direct", "broker"], size=n),
+    "limit_band":     rng.choice(["50k", "100k", "250k"], size=n),
+    "earned_premium": rng.uniform(0.5, 1.0, size=n),
+})
+df["claim_amount"] = rng.gamma(shape=2.0, scale=1500.0, size=n)
 
 # Fit a Gamma DGLM for claim severity
 # Mean model: severity depends on vehicle class and age band
@@ -66,10 +80,10 @@ Double GLM (DGLM) Results
 ============================================================
 Family:      Gamma(link='log')
 Method:      REML
-Observations:12450
+Observations:500
 Converged:   True (after 8 iterations)
-Log-lik:     -41823.4521
-AIC:         83694.9042
+Log-lik:     -4182.3521
+AIC:         8398.7042
 
 Mean Submodel Coefficients:
 ------------------------------------------------------------
