@@ -1,5 +1,11 @@
 # insurance-dispersion
 
+[![PyPI](https://img.shields.io/pypi/v/insurance-dispersion)](https://pypi.org/project/insurance-dispersion/)
+[![Python](https://img.shields.io/pypi/pyversions/insurance-dispersion)](https://pypi.org/project/insurance-dispersion/)
+[![Tests](https://img.shields.io/badge/tests-passing-brightgreen)]()
+[![License](https://img.shields.io/badge/license-BSD--3-blue)]()
+
+
 Double GLM (DGLM) for joint modelling of mean and dispersion in non-life insurance pricing.
 
 ## The problem
