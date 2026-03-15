@@ -42,6 +42,7 @@ dev = [
 Homepage = "https://github.com/burning-cost/insurance-dispersion"
 Repository = "https://github.com/burning-cost/insurance-dispersion"
 Issues = "https://github.com/burning-cost/insurance-dispersion/issues"
+Documentation = "https://github.com/burning-cost/insurance-dispersion#readme"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/insurance_dispersion"]
