@@ -86,16 +86,19 @@ def quantile_residuals(result: "DGLMResult") -> np.ndarray:
         p = scipy.stats.gamma.cdf(y, a=shape, scale=scale)
 
     elif isinstance(family, fam.InverseGaussian):
-        # Inverse-Gaussian CDF via scipy
-        mu_ig = mu
-        lam = mu_ig ** 2 / np.clip(phi * mu_ig ** 3, 1e-300, None)
-        # scipy uses mu, lam parametrisation
-        p = scipy.stats.invgauss.cdf(y, mu=mu_ig / lam, scale=lam)
+        # scipy.stats.invgauss(mu_shape, scale) has mean = mu_shape*scale,
+        # var = mu_shape^3 * scale^2.  Our model has mean=mu, var=phi*mu^3.
+        # Solving: mu_shape = phi*mu, scale = 1/phi.
+        mu_shape = phi * mu
+        scale = 1.0 / np.clip(phi, 1e-300, None)
+        p = scipy.stats.invgauss.cdf(y, mu=mu_shape, scale=scale)
 
     elif isinstance(family, fam.Poisson):
-        # Discrete: randomise between F(y-1) and F(y)
-        shape = 1.0 / np.clip(phi, 1e-300, None)
-        # Quasi-Poisson: use scaled Poisson approx
+        # Quasi-Poisson has no natural phi-adjusted CDF: the quasi-likelihood
+        # only specifies variance up to a scale, not a full distribution.
+        # We use plain Poisson CDF with randomisation (Dunn & Smyth 1996)
+        # to obtain approximately N(0,1) residuals when phi ~ 1. For strongly
+        # overdispersed data (phi >> 1), fall through to deviance residuals.
         p_lo = scipy.stats.poisson.cdf(np.maximum(y - 1, 0), mu=mu)
         p_hi = scipy.stats.poisson.cdf(y, mu=mu)
         u = np.random.uniform(size=len(y))

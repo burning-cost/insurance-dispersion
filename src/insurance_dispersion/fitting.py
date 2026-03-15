@@ -12,7 +12,8 @@ Dispersion pseudo-response:
   directly (NOT d_i / phi_i). The Gamma family has E[d_i] = phi_i, so the
   Gamma GLM log(E[d_i]) = z_i^T alpha recovers log(phi_i). Dividing by phi_i
   (as sometimes done in saddlepoint implementations for non-Gamma families)
-  would produce a biased fixed point: phi_fixed = sqrt(phi_true) ≠ phi_true.
+  produces E[d_i/phi_i] = 1 (constant), so the Gamma GLM fits an intercept-only
+  model regardless of z_i — phi variation is completely absorbed into the scaling.
 
 REML correction (Smyth & Verbyla 1999):
   Subtract h_ii * phi_i from d_i before the dispersion fit. This corrects for
@@ -251,8 +252,9 @@ def dglm_fit(
     Fit a Double GLM via alternating IRLS (Smyth 1989).
 
     The dispersion pseudo-response is the unit deviance d_i (NOT d_i/phi_i).
-    The Gamma GLM models E[d_i] = phi_i. Using d_i/phi_i would give a biased
-    fixed point phi_fixed = sqrt(phi_true) due to the self-referential scaling.
+    The Gamma GLM models E[d_i] = phi_i. Using d_i/phi_i would produce
+    E[d_i/phi_i] = 1 (constant), so the Gamma GLM reduces to an intercept-only
+    model unable to recover any variation in phi_i across covariates.
 
     Convergence: relative change in Gamma deviance between outer iterations,
     following the R dglm convention. This is tracked on the UNDAMPED alpha_step

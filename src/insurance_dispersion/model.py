@@ -23,6 +23,8 @@ import pandas as pd
 import formulaic
 from formulaic import Formula
 
+import warnings
+
 from insurance_dispersion.families import Family
 from insurance_dispersion.fitting import dglm_fit, _sandwich_vcov
 from insurance_dispersion.results import DGLMResult, SubmodelResult
@@ -84,9 +86,9 @@ class DGLM:
         Mean family: Gamma(), Gaussian(), InverseGaussian(), Tweedie(p=1.5),
         Poisson(), NegativeBinomial().
     dlink : str
-        Link function for the dispersion submodel. Default 'log' ensures
-        phi_i > 0. The only other practical choice is 'identity' (unconstrained,
-        use with care for very large phi).
+        Deprecated. Only 'log' link is supported for the dispersion submodel.
+        Passing any other value raises a DeprecationWarning and is ignored.
+        Log link ensures phi_i > 0 always.
     data : DataFrame, optional
         Training data. Can be passed at fit time instead.
     exposure : str, optional
@@ -114,7 +116,13 @@ class DGLM:
         self.formula = formula
         self.dformula = dformula
         self.family = family
-        self.dlink = dlink
+        if dlink != "log":
+            warnings.warn(
+                f"dlink='{dlink}' is not supported; only 'log' link is implemented for the dispersion submodel. The dlink parameter is deprecated and will be removed in a future version. Defaulting to log link.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        self.dlink = "log"  # always log; dlink param retained for backward compat
         self.exposure = exposure
         self.method = method
         # Stored for LRT in overdispersion_test
@@ -145,7 +153,8 @@ class DGLM:
         maxit : int
             Maximum outer iterations.
         epsilon : float
-            Convergence threshold (relative change in -2*loglik).
+            Convergence threshold (relative change in Gamma deviance of the
+            dispersion pseudo-response between outer iterations).
         verbose : bool
             Print log-likelihood at each outer iteration.
 

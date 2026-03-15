@@ -195,9 +195,9 @@ Alternating IRLS (Smyth 1989, Smyth & Verbyla 1999):
 
 1. Initialise mu from intercept-only GLM, phi = 1
 2. **Mean step**: IRLS for GLM(y ~ X, family, weights = prior_weights / phi_i)
-3. **Dispersion step**: compute unit deviances d_i; fit Gamma GLM on delta_i = d_i / phi_i with log link
+3. **Dispersion step**: compute unit deviances d_i; fit Gamma GLM on delta_i = d_i with log link (E[d_i] = phi_i)
 4. **REML correction** (method='reml'): subtract hat-matrix diagonal from delta_i before dispersion fit. Recommended when the mean model has many parameters.
-5. Check convergence: relative change in -2*loglik < epsilon
+5. Check convergence: relative change in Gamma deviance of the dispersion pseudo-response < epsilon
 6. Repeat until convergence or maxit reached
 
 Pure numpy/scipy. No ML frameworks, no statsmodels dependency.
@@ -210,7 +210,7 @@ Pure numpy/scipy. No ML frameworks, no statsmodels dependency.
 
 **Exposure on mean only**: log(exposure) enters as an offset in the mean linear predictor. Dispersion phi_i is per-unit-exposure: a 6-month policy has the same dispersion per claim as a 12-month policy with identical risk characteristics.
 
-**Log link for dispersion default**: ensures phi_i > 0 always. The identity link is available but requires careful monitoring — it can produce negative phi_i estimates for extrapolation.
+**Log link for dispersion (only supported link)**: ensures phi_i > 0 always. The identity link option has been removed — it was accepted but not implemented in the fitting engine, silently defaulting to log link. Only log link is supported.
 
 
 ## Databricks Notebook

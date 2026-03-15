@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import pandas as pd
+import warnings
+
 import scipy.stats
 
 from insurance_dispersion.fitting import _sandwich_vcov
@@ -168,8 +170,19 @@ class DGLMResult:
         Z_new = dglm._build_disp_matrix(newdata)
 
         eta_mu = X_new @ self.mean_model.coef
-        if dglm.exposure is not None and dglm.exposure in newdata.columns:
-            eta_mu = eta_mu + np.log(np.clip(newdata[dglm.exposure].to_numpy(dtype=float), 1e-300, None))
+        if dglm.exposure is not None:
+            if dglm.exposure in newdata.columns:
+                eta_mu = eta_mu + np.log(
+                    np.clip(newdata[dglm.exposure].to_numpy(dtype=float), 1e-300, None)
+                )
+            else:
+                warnings.warn(
+                    f"Exposure column '{dglm.exposure}' not found in newdata. "
+                    "Predictions will be on a per-unit-exposure basis (as if exposure=1). "
+                    "Pass newdata with the exposure column to get absolute-scale predictions.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
         mu_new = dglm.family.eta_to_mu(eta_mu)
 

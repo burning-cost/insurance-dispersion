@@ -414,7 +414,7 @@ wheels = [
 
 [[package]]
 name = "insurance-dispersion"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "formulaic" },

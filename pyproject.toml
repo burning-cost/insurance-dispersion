@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "insurance-dispersion"
-version = "0.1.0"
+version = "0.1.1"
 description = "Double GLM (DGLM) for joint modelling of mean and dispersion in insurance pricing"
 readme = "README.md"
 license = { text = "MIT" }
