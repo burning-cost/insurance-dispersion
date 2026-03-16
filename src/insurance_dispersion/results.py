@@ -212,6 +212,11 @@ class DGLMResult:
         The null model has phi = scalar (estimated by the intercept-only
         dispersion GLM). The alternative is the fitted DGLM.
 
+        Note: when method='reml', both models are fitted with a REML-adjusted
+        pseudo-likelihood. LRT comparisons using REML-adjusted likelihoods are
+        not standard — the chi-squared approximation is asymptotic and may not
+        hold exactly. For formal hypothesis testing, prefer method='ml'.
+
         Returns
         -------
         dict with keys: statistic, df, p_value, conclusion
@@ -219,6 +224,18 @@ class DGLMResult:
         from insurance_dispersion.model import DGLM
 
         dglm = self._dglm
+
+        if dglm.method == "reml":
+            warnings.warn(
+                "overdispersion_test() was called on a model fitted with method='reml'. "
+                "The likelihood ratio test uses a REML-adjusted pseudo-likelihood, and "
+                "the chi-squared approximation is asymptotic — the p-value should be "
+                "treated as approximate. For formal hypothesis testing, refit with "
+                "method='ml' before calling overdispersion_test().",
+                UserWarning,
+                stacklevel=2,
+            )
+
         # Fit null: same mean formula, dformula='~1'
         null_model = DGLM(
             formula=dglm.formula,
@@ -259,7 +276,7 @@ class DGLMResult:
             "=" * 60,
             f"Family:      {self._dglm.family}",
             f"Method:      {self._dglm.method.upper()}",
-            f"Observations:{self.n_obs}",
+            f"Observations: {self.n_obs}",
             f"Converged:   {self.converged} (after {self.n_iter} iterations)",
             f"Log-lik:     {self.loglik:.4f}",
             f"AIC:         {self.aic:.4f}",

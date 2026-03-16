@@ -31,5 +31,5 @@ from insurance_dispersion.model import DGLM
 from insurance_dispersion.results import DGLMResult
 from insurance_dispersion import families
 
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 __all__ = ["DGLM", "DGLMResult", "families"]

@@ -135,7 +135,11 @@ class Family(ABC):
         """
         Per-observation unit deviance d_i = 2 * (log f(y|y) - log f(y|mu)).
 
-        This is phi-free. The dispersion step scales by phi_i: delta_i = d_i / phi_i.
+        This is phi-free. The unit deviance d_i is used directly as the
+        dispersion pseudo-response in the dispersion step (E[d_i] = phi_i).
+        Do NOT divide by phi_i before passing to the dispersion GLM — that
+        would produce E[d_i/phi_i] = 1 (a constant), making the dispersion
+        GLM degenerate. See fitting.py for the correct usage.
         """
 
     @abstractmethod

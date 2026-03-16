@@ -32,9 +32,7 @@ def pearson_residuals(result: "DGLMResult") -> np.ndarray:
     """
     mu = result.mu_
     phi = result.phi_
-    y = result._dglm._data[result._dglm.formula.split("~")[0].strip()].to_numpy(
-        dtype=float
-    )
+    y = _get_y(result)
     V = result._dglm.family.variance(mu)
     return (y - mu) / np.sqrt(np.clip(phi * V, 1e-300, None))
 
@@ -86,11 +84,17 @@ def quantile_residuals(result: "DGLMResult") -> np.ndarray:
         p = scipy.stats.gamma.cdf(y, a=shape, scale=scale)
 
     elif isinstance(family, fam.InverseGaussian):
-        # scipy.stats.invgauss(mu_shape, scale) has mean = mu_shape*scale,
-        # var = mu_shape^3 * scale^2.  Our model has mean=mu, var=phi*mu^3.
-        # Solving: mu_shape = phi*mu, scale = 1/phi.
-        mu_shape = phi * mu
-        scale = 1.0 / np.clip(phi, 1e-300, None)
+        # scipy.stats.invgauss(mu_shape, scale) parameterisation:
+        #   mean = mu_shape * scale
+        #   var  = mu_shape^3 * scale^2
+        # Our DGLM model has: mean = mu, var = phi * mu^3.
+        # Matching: mu_shape * scale = mu  and  mu_shape^3 * scale^2 = phi * mu^3
+        # Dividing the variance equation by the cube of the mean equation:
+        #   scale^2 / scale^3 = phi => 1/scale = phi => scale = sqrt(phi)
+        # Then: mu_shape = mu / scale = mu / sqrt(phi)
+        sqrt_phi = np.sqrt(np.clip(phi, 1e-300, None))
+        mu_shape = mu / sqrt_phi
+        scale = sqrt_phi
         p = scipy.stats.invgauss.cdf(y, mu=mu_shape, scale=scale)
 
     elif isinstance(family, fam.Poisson):
