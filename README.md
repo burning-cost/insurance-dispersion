@@ -244,6 +244,21 @@ The DGLM's Tweedie deviance on the test set is comparable to the constant-phi GL
 
 The fit time penalty (3–6x slower) comes from the alternating IRLS. On 25k policies this is under 10 seconds; the cost is proportional to the number of iterations needed for convergence.
 
+**Gamma severity benchmark (unit test, `benchmarks/benchmark.py`)**
+
+3,000 Gamma severity observations, DGP with known channel-dependent dispersion (phi_direct=0.30, phi_broker=1.20). 2,400 train / 600 test. Converged in 8 iterations.
+
+| Metric                         | DGLM result  | Target |
+|--------------------------------|--------------|--------|
+| Converged                      | Yes (8 iter) | —      |
+| Phi estimate (direct channel)  | 0.304        | 0.30   |
+| Phi estimate (broker channel)  | 1.446        | 1.20   |
+| 90% PI coverage — all          | 88.8%        | 90.0%  |
+| 90% PI coverage — direct       | 88.5%        | 90.0%  |
+| 90% PI coverage — broker       | 89.4%        | 90.0%  |
+
+Phi recovery is close for direct (0.304 vs true 0.30) and moderately close for broker (1.446 vs true 1.20). The broker estimate is upward-biased at n=957 training observations — expected given the fat-tailed Gamma DGP. Coverage across both channels is within 1.5pp of nominal.
+
 ## Related Libraries
 
 | Library | What it does |
