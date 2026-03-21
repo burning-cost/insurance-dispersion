@@ -34,7 +34,7 @@ This matters for:
 ## Installation
 
 ```bash
-pip install insurance-dispersion
+uv add insurance-dispersion
 ```
 
 Or from source:
