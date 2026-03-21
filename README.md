@@ -8,6 +8,8 @@
 
 Double GLM (DGLM) for joint modelling of mean and dispersion in non-life insurance pricing.
 
+**Blog post:** [Double GLM for Insurance: Every Risk Gets Its Own Dispersion](https://burning-cost.github.io/2026/03/11/insurance-dispersion/)
+
 ## The problem
 
 Standard GLMs assume a single scalar dispersion parameter phi shared across all observations. For a Gamma severity model, that means your fleet broker policy and your personal lines online policy are assumed to have identical volatility around the fitted mean. That assumption is almost always wrong.
@@ -42,6 +44,8 @@ git clone https://github.com/burning-cost/insurance-dispersion
 cd insurance-dispersion
 uv pip install -e .
 ```
+
+> 💬 Questions or feedback? Start a [Discussion](https://github.com/burning-cost/insurance-dispersion/discussions). Found it useful? A ⭐ helps others find it.
 
 ## Quick start
 
