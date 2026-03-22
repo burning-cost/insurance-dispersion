@@ -7,7 +7,7 @@ name = "insurance-dispersion"
 version = "0.1.2"
 description = "Double GLM (DGLM) for joint modelling of mean and dispersion in insurance pricing"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
     { name = "Burning Cost", email = "pricing.frontier@gmail.com" }
 ]
