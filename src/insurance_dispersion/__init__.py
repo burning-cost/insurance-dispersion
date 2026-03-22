@@ -30,6 +30,7 @@ Quick start::
 from insurance_dispersion.model import DGLM
 from insurance_dispersion.results import DGLMResult
 from insurance_dispersion import families
+from insurance_dispersion import diagnostics
 
 from importlib.metadata import version, PackageNotFoundError
 
@@ -37,4 +38,4 @@ try:
     __version__ = version("insurance-dispersion")
 except PackageNotFoundError:
     __version__ = "0.0.0"  # not installed
-__all__ = ["DGLM", "DGLMResult", "families"]
+__all__ = ["DGLM", "DGLMResult", "families", "diagnostics"]

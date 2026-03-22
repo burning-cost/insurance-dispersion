@@ -113,6 +113,10 @@ class DGLM:
         weights: Optional[Union[str, np.ndarray]] = None,
         method: str = "reml",
     ):
+        if method not in ("reml", "ml"):
+            raise ValueError(
+                f"method must be 'reml' or 'ml', got {method!r}"
+            )
         self.formula = formula
         self.dformula = dformula
         self.family = family
