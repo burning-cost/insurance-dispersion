@@ -218,9 +218,21 @@ Pure numpy/scipy. No ML frameworks, no statsmodels dependency.
 **Log link for dispersion (only supported link)**: ensures phi_i > 0 always. The identity link option has been removed — it was accepted but not implemented in the fitting engine, silently defaulting to log link. Only log link is supported.
 
 
-## Databricks Notebook
+## Databricks Notebooks
 
-A ready-to-run Databricks notebook benchmarking this library against standard approaches is available in [burning-cost-examples](https://github.com/burning-cost/burning-cost-examples/blob/main/notebooks/insurance_dispersion_demo.py).
+[`databricks/benchmark.py`](databricks/benchmark.py) — the definitive benchmark:
+Double GLM vs constant-phi Gamma GLM on 20,000 synthetic UK motor claims with known
+heterogeneous dispersion (phi 0.30–1.50 across four distribution channels). Measures
+Gamma deviance, phi MAE vs true, variance ratio calibration by channel, and 90%
+prediction interval coverage. Run this first.
+
+[`notebooks/dglm_demo.py`](notebooks/dglm_demo.py) — full API walkthrough:
+mean and dispersion factor tables, prediction, overdispersion test, diagnostic plots,
+and a Tweedie pure premium example. Good for understanding the interface.
+
+[`notebooks/benchmark_dispersion.py`](notebooks/benchmark_dispersion.py) — earlier
+benchmark on commercial property data (25,000 policies, Tweedie family). Covers a
+different DGP and family than the new benchmark above.
 
 ## Reference
 
@@ -230,10 +242,14 @@ A ready-to-run Databricks notebook benchmarking this library against standard ap
 
 ## Performance
 
+See `databricks/benchmark.py` for the Databricks benchmark (Gamma severity, 20,000 policies,
+four-channel motor book, phi range 0.30–1.50). The commercial property benchmark below
+uses a Tweedie family and is in `notebooks/benchmark_dispersion.py`.
+
 Benchmarked against a constant-phi Tweedie GLM (statsmodels) on synthetic UK
 commercial property pure premium data: 25,000 policies, known DGP where phi varies
 3–6x across distribution channels (direct vs broker SME vs broker large), temporal
-70/30 train/test split. See `notebooks/benchmark_dispersion.py` for full methodology.
+70/30 train/test split.
 
 | Metric                         | Tweedie GLM (const phi) | DGLM       |
 |--------------------------------|-------------------------|------------|
